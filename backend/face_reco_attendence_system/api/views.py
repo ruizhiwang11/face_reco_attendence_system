@@ -1,15 +1,19 @@
+import PIL
 from django.shortcuts import render
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
 from .models import Student, StudentImage
 from .serializers import StudentImageSerializer, StudentBasicSerializer, StudentDetailsSerializer, UpdateStudentImageSerializer, DeleteStudentSerializer
+from PIL import Image
+import numpy as np
+import cv2
+from .trainer import Trainer
 
 
 class AddStudentView(APIView):
 
     def post(self, request, *args, **kwargs):
-
         student_serializer = StudentBasicSerializer(data=self.request.data)
         if student_serializer.is_valid():
             student = student_serializer.save()
@@ -86,3 +90,36 @@ class DeleteStudentView(APIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
         else:
             return Response(delete_student_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TrainView(APIView):
+
+    def __init__(self):
+        self.detector = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+    def get_images_and_labels(self):
+        face_samples = []
+        ids = []
+        all_students = Student.objects.all()
+        for student in all_students:
+            all_images_set = StudentImage.objects.filter(student=student)
+            for image in all_images_set:
+                PIL_image = Image.open(image.image.path).convert('L')
+                image_numpy = np.array(PIL_image, 'uint8')
+                id = student.id
+                faces = self.detector.detectMultiScale(image_numpy)
+                for(x, y, w, h) in faces:
+                    face_samples.append(image_numpy[y:y+h, x:x+w])
+                    ids.append(id)
+        return face_samples, ids
+
+    def get(self, request, *args, **kwargs):
+
+        try:
+            trainer = Trainer()
+            faces, ids = self.get_images_and_labels()
+            trainer.train(faces, ids)
+            return Response({'msg': f'{len(ids)} faces trained'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'msg': e.with_traceback} ,status=status.HTTP_500_INTERNAL_SERVER_ERROR)
