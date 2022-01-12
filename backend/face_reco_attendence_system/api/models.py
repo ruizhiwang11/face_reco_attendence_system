@@ -28,3 +28,23 @@ class StudentImage(models.Model):
 
     def __str__(self):
         return "{} : {}".format(self.student.matric_number, self.student.name, self.image.name)
+
+
+class DetectionImage(models.Model):
+
+    image = models.FileField(blank=False,
+                             null=False, upload_to="detection")
+
+    def save(self, *args, **kwargs):
+        if self.pk is None:
+            saved_image = self.image
+            self.image = None
+            super(DetectionImage, self).save(*args, **kwargs)
+            self.image = saved_image
+            if 'force_insert' in kwargs:
+                kwargs.pop('force_insert')
+        super(DetectionImage, self).save(*args, **kwargs)
+
+    def delete(self, using=None, keep_parents=False):
+        self.image.storage.delete(self.image.name)
+        super().delete()

@@ -1,14 +1,13 @@
-import PIL
 from django.shortcuts import render
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
 from .models import Student, StudentImage
-from .serializers import StudentImageSerializer, StudentBasicSerializer, StudentDetailsSerializer, UpdateStudentImageSerializer, DeleteStudentSerializer
+from .serializers import DetectionSerializer, StudentImageSerializer, StudentBasicSerializer, StudentDetailsSerializer, UpdateStudentImageSerializer, DeleteStudentSerializer, DetectionImage
 from PIL import Image
 import numpy as np
-import cv2
 from .trainer import Trainer
+from .detector import Detector
 
 
 class AddStudentView(APIView):
@@ -73,6 +72,7 @@ class UpdateStudentImageView(APIView):
 class DeleteStudentView(APIView):
 
     def delete(self, request, *args, **kwargs):
+
         delete_student_serializer = DeleteStudentSerializer(data=request.data)
         if delete_student_serializer.is_valid():
             matric_number = delete_student_serializer.data.get('matric_number')
@@ -95,10 +95,11 @@ class DeleteStudentView(APIView):
 class TrainView(APIView):
 
     def __init__(self):
-        self.detector = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+        self.trainer = Trainer()
 
     def get_images_and_labels(self):
+
         face_samples = []
         ids = []
         all_students = Student.objects.all()
@@ -107,19 +108,49 @@ class TrainView(APIView):
             for image in all_images_set:
                 PIL_image = Image.open(image.image.path).convert('L')
                 image_numpy = np.array(PIL_image, 'uint8')
-                id = student.id
-                faces = self.detector.detectMultiScale(image_numpy)
-                for(x, y, w, h) in faces:
-                    face_samples.append(image_numpy[y:y+h, x:x+w])
-                    ids.append(id)
+                ids.append(student.id)
+                face_samples.append(image_numpy)
         return face_samples, ids
 
     def get(self, request, *args, **kwargs):
 
         try:
-            trainer = Trainer()
+            self.trainer = Trainer()
             faces, ids = self.get_images_and_labels()
-            trainer.train(faces, ids)
+            self.trainer.train(faces, ids)
             return Response({'msg': f'{len(ids)} faces trained'}, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({'msg': e.with_traceback} ,status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'msg': e.with_traceback}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class DetectionView(APIView):
+
+    def __init__(self):
+
+        self.detector = Detector()
+
+    def post(self, request, *args, **kwargs):
+
+        request_image = self.request.FILES.get('image')
+        detection_serializer = DetectionSerializer(data={
+            'image': request_image})
+        if detection_serializer.is_valid():
+            detection_serializer.save()
+
+            image_object = DetectionImage.objects.filter(
+                id=detection_serializer.data.get('id'))[0]
+            PIL_image = Image.open(image_object.image.path).convert('L')
+            image_numpy = np.array(PIL_image, 'uint8')
+            id, confidence = self.detector.detect(image_numpy)
+            image_object.delete()
+            if confidence > 100:
+                return Response({'msg': 'unknow confidence value'}, status=status.HTTP_400_BAD_REQUEST)
+
+            student = Student.objects.get(id=id)
+            if not student:
+                return Response({'msg': 'unknow student under detection'}, status=status.HTTP_404_NOT_FOUND)
+            student_details_json_data = StudentDetailsSerializer(student).data
+            student_details_json_data.update({"confidence": confidence})
+            return Response(student_details_json_data, status=status.HTTP_200_OK)
+        else:
+            return Response(detection_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
